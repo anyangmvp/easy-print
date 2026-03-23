@@ -22,7 +22,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -195,12 +198,25 @@ private fun PrintPreviewContent(
 
     val scale = settings.scale / 100f
 
+    val colorMatrix = remember(settings.colorMode) {
+        when (settings.colorMode) {
+            ColorMode.Color -> null
+            ColorMode.Grayscale -> ColorMatrix().apply { setToSaturation(0f) }
+            ColorMode.BlackWhite -> ColorMatrix(floatArrayOf(
+                0.299f, 0.587f, 0.114f, 0f, 0f,
+                0.299f, 0.587f, 0.114f, 0f, 0f,
+                0.299f, 0.587f, 0.114f, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            ))
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxHeight()
                 .aspectRatio(paperAspectRatio)
@@ -228,23 +244,38 @@ private fun PrintPreviewContent(
                 else -> Alignment.Center
             }
         ) {
-            // 对于 <= 100% 使用 fillMaxHeight(scale)，对于 > 100% 使用 graphicsLayer
             if (scale <= 1f) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "打印预览",
                     modifier = Modifier.fillMaxHeight(scale),
-                    contentScale = ContentScale.Fit
+                    contentScale = ContentScale.Fit,
+                    colorFilter = colorMatrix?.let { ColorFilter.colorMatrix(it) }
                 )
             } else {
+                val maxW = maxWidth
+                val maxH = maxHeight
+                val xOffset = when (settings.horizontalAlignment) {
+                    HorizontalAlignment.Left -> maxW * (1f - 1f / scale) / 2
+                    HorizontalAlignment.Center -> 0.dp
+                    HorizontalAlignment.Right -> -maxW * (1f - 1f / scale) / 2
+                }
+                val yOffset = when (settings.verticalAlignment) {
+                    VerticalAlignment.Top -> maxH * (1f - 1f / scale) / 2
+                    VerticalAlignment.Center -> 0.dp
+                    VerticalAlignment.Bottom -> -maxH * (1f - 1f / scale) / 2
+                }
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "打印预览",
-                    modifier = Modifier.graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    },
-                    contentScale = ContentScale.Fit
+                    modifier = Modifier
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .offset(x = xOffset, y = yOffset),
+                    contentScale = ContentScale.Fit,
+                    colorFilter = colorMatrix?.let { ColorFilter.colorMatrix(it) }
                 )
             }
         }
