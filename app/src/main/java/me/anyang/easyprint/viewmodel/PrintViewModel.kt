@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import me.anyang.easyprint.data.*
 import me.anyang.easyprint.print.NetworkPrinterScanner
+import me.anyang.easyprint.print.PdfGenerator
 
 class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -75,7 +76,22 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
             name.endsWith(".jpeg", ignoreCase = true) ||
             name.endsWith(".png", ignoreCase = true) ||
             name.endsWith(".gif", ignoreCase = true) ||
-            name.endsWith(".webp", ignoreCase = true) -> FileType.IMAGE
+            name.endsWith(".webp", ignoreCase = true) ||
+            name.endsWith(".bmp", ignoreCase = true) ||
+            name.endsWith(".tiff", ignoreCase = true) -> FileType.IMAGE
+            mimeType?.startsWith("text/") == true ||
+            name.endsWith(".txt", ignoreCase = true) ||
+            name.endsWith(".csv", ignoreCase = true) ||
+            name.endsWith(".json", ignoreCase = true) ||
+            name.endsWith(".xml", ignoreCase = true) ||
+            name.endsWith(".md", ignoreCase = true) ||
+            name.endsWith(".log", ignoreCase = true) ||
+            name.endsWith(".java", ignoreCase = true) ||
+            name.endsWith(".kt", ignoreCase = true) ||
+            name.endsWith(".py", ignoreCase = true) ||
+            name.endsWith(".js", ignoreCase = true) ||
+            name.endsWith(".html", ignoreCase = true) ||
+            name.endsWith(".css", ignoreCase = true) -> FileType.TEXT
             else -> FileType.UNKNOWN
         }
 
@@ -155,8 +171,42 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
         _printSettings.value = _printSettings.value.copy(colorMode = colorMode)
     }
 
+    // 获取选中的页面列表
+    fun getSelectedPages(totalPages: Int): List<Int> {
+        return when (val range = _printSettings.value.pageRange) {
+            is PageRange.All -> (1..totalPages).toList()
+            is PageRange.Odd -> (1..totalPages).filter { it % 2 == 1 }
+            is PageRange.Even -> (1..totalPages).filter { it % 2 == 0 }
+            is PageRange.Custom -> range.selectedPages.sorted()
+        }
+    }
+
+    // 生成打印用的PDF
+    suspend fun generatePrintPdf(file: PrintFile): java.io.File? {
+        val pdfGenerator = PdfGenerator(getApplication())
+        val selectedPages = getSelectedPages(file.pageCount)
+        return pdfGenerator.generatePrintPdf(
+            Uri.parse(file.uri),
+            file.type,
+            _printSettings.value,
+            selectedPages
+        )
+    }
+
     fun setDuplexMode(duplexMode: DuplexMode) {
         _printSettings.value = _printSettings.value.copy(duplexMode = duplexMode)
+    }
+
+    fun setHorizontalAlignment(alignment: HorizontalAlignment) {
+        _printSettings.value = _printSettings.value.copy(horizontalAlignment = alignment)
+    }
+
+    fun setVerticalAlignment(alignment: VerticalAlignment) {
+        _printSettings.value = _printSettings.value.copy(verticalAlignment = alignment)
+    }
+
+    fun setIsPrinting(isPrinting: Boolean) {
+        _isPrinting.value = isPrinting
     }
 
     fun togglePageSelection() {
@@ -264,10 +314,15 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildPrintAttributes(): PrintAttributes {
         val settings = _printSettings.value
         val mediaSize = when (settings.paperSize) {
+            PaperSize.A3 -> PrintAttributes.MediaSize.ISO_A3
             PaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4
             PaperSize.A5 -> PrintAttributes.MediaSize.ISO_A5
+            PaperSize.A6 -> PrintAttributes.MediaSize.ISO_A6
             PaperSize.Letter -> PrintAttributes.MediaSize.NA_LETTER
             PaperSize.Legal -> PrintAttributes.MediaSize.NA_LEGAL
+            PaperSize.Tabloid -> PrintAttributes.MediaSize.NA_LEDGER
+            PaperSize.B4 -> PrintAttributes.MediaSize.ISO_B4
+            PaperSize.B5 -> PrintAttributes.MediaSize.ISO_B5
         }
 
         val finalMediaSize = if (settings.isLandscape) {

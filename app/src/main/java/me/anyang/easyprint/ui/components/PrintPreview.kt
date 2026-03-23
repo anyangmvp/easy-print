@@ -7,8 +7,12 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
@@ -18,13 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import me.anyang.easyprint.data.FileType
-import me.anyang.easyprint.data.PaperSize
-import me.anyang.easyprint.data.PrintSettings
+import androidx.compose.ui.unit.sp
+import me.anyang.easyprint.data.*
 import java.io.IOException
 
 @Composable
@@ -32,17 +37,40 @@ fun PrintPreview(
     uri: Uri,
     fileType: FileType,
     settings: PrintSettings,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    currentPage: Int = 0,
+    onPageChange: (Int) -> Unit = {},
+    totalPages: Int = 1,
+    selectedPages: List<Int> = emptyList(),
+    fileName: String = ""
 ) {
     val context = LocalContext.current
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var pageCount by remember { mutableIntStateOf(1) }
+
+    // 使用选中的页面列表，如果没有则使用全部页面
+    val effectiveSelectedPages = selectedPages.ifEmpty { (1..totalPages).toList() }
+    val effectiveTotalPages = effectiveSelectedPages.size
+    
+    // currentPage 是选中页面列表中的索引（0, 1, 2...）
+    val effectiveCurrentIndex = currentPage.coerceIn(0, (effectiveTotalPages - 1).coerceAtLeast(0))
+    val effectiveCurrentPage = if (effectiveSelectedPages.isNotEmpty()) {
+        effectiveSelectedPages[effectiveCurrentIndex] - 1
+    } else 0
+
+    // 用于文本文件预览
+    var textContent by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uri) {
         isLoading = true
+        textContent = null
         when (fileType) {
             FileType.PDF -> {
-                loadPdfFirstPage(context, uri) { bmp ->
+                loadPdfPageCount(context, uri) { count ->
+                    pageCount = count
+                }
+                loadPdfPage(context, uri, effectiveCurrentPage) { bmp ->
                     bitmap = bmp
                     isLoading = false
                 }
@@ -53,76 +81,100 @@ fun PrintPreview(
                     isLoading = false
                 }
             }
-            else -> isLoading = false
+            FileType.TEXT -> {
+                // 加载文本文件
+                textContent = loadTextFile(context, uri)
+                isLoading = false
+            }
+            else -> {
+                // 其他类型文件，尝试作为文本加载，如果失败则显示提示
+                textContent = loadTextFile(context, uri)
+                isLoading = false
+            }
         }
     }
 
-    // 计算纸张比例
-    val paperAspectRatio = remember(settings.paperSize, settings.isLandscape) {
-        val width = if (settings.isLandscape) settings.paperSize.heightMm else settings.paperSize.widthMm
-        val height = if (settings.isLandscape) settings.paperSize.widthMm else settings.paperSize.heightMm
-        width / height
+    LaunchedEffect(uri, effectiveCurrentPage) {
+        if (fileType == FileType.PDF) {
+            isLoading = true
+            loadPdfPage(context, uri, effectiveCurrentPage) { bmp ->
+                bitmap = bmp
+                isLoading = false
+            }
+        }
     }
 
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-        contentAlignment = Alignment.Center
-    ) {
-        when {
-            isLoading -> {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            bitmap != null -> {
-                // 根据纸张比例显示，100%缩放时占满预览区域
-                val scale = settings.scale / 100f
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize(0.95f)
-                            .aspectRatio(paperAspectRatio)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Image(
-                            bitmap = bitmap!!.asImageBitmap(),
-                            contentDescription = "打印预览",
-                            modifier = Modifier
-                                .fillMaxSize(scale.coerceIn(0.1f, 1f))
-                                .padding(4.dp),
-                            contentScale = ContentScale.Fit
-                        )
-                    }
+    Column(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center
+        ) {
+            when {
+                isLoading -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(32.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                bitmap != null -> {
+                    PrintPreviewContent(
+                        bitmap = bitmap!!,
+                        settings = settings
+                    )
+                }
+                textContent != null -> {
+                    // 文本文件预览
+                    TextFilePreview(
+                        content = textContent!!,
+                        settings = settings
+                    )
+                }
+                else -> {
+                    // 不支持的文件类型提示
+                    UnsupportedFilePreview(fileType = fileType, fileName = fileName)
                 }
             }
-            else -> {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+        }
+
+        if (fileType == FileType.PDF && effectiveTotalPages > 1) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { if (effectiveCurrentIndex > 0) onPageChange(effectiveCurrentIndex - 1) },
+                    enabled = effectiveCurrentIndex > 0
                 ) {
                     Icon(
-                        imageVector = when (fileType) {
-                            FileType.PDF -> Icons.Outlined.Description
-                            FileType.IMAGE -> Icons.Outlined.Image
-                            else -> Icons.Outlined.Description
-                        },
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                        contentDescription = "上一页",
+                        tint = if (effectiveCurrentIndex > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "无法预览",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                }
+
+                Text(
+                    text = "${effectiveCurrentIndex + 1} / $effectiveTotalPages",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+
+                IconButton(
+                    onClick = { if (effectiveCurrentIndex < effectiveTotalPages - 1) onPageChange(effectiveCurrentIndex + 1) },
+                    enabled = effectiveCurrentIndex < effectiveTotalPages - 1
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = "下一页",
+                        tint = if (effectiveCurrentIndex < effectiveTotalPages - 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -130,16 +182,103 @@ fun PrintPreview(
     }
 }
 
-private fun loadPdfFirstPage(
+@Composable
+private fun PrintPreviewContent(
+    bitmap: Bitmap,
+    settings: PrintSettings
+) {
+    val paperAspectRatio = remember(settings.paperSize, settings.isLandscape) {
+        val width = if (settings.isLandscape) settings.paperSize.heightMm else settings.paperSize.widthMm
+        val height = if (settings.isLandscape) settings.paperSize.widthMm else settings.paperSize.heightMm
+        width / height
+    }
+
+    val scale = settings.scale / 100f
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .aspectRatio(paperAspectRatio)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.White),
+            contentAlignment = when {
+                settings.horizontalAlignment == HorizontalAlignment.Left && settings.verticalAlignment == VerticalAlignment.Top ->
+                    Alignment.TopStart
+                settings.horizontalAlignment == HorizontalAlignment.Left && settings.verticalAlignment == VerticalAlignment.Center ->
+                    Alignment.CenterStart
+                settings.horizontalAlignment == HorizontalAlignment.Left && settings.verticalAlignment == VerticalAlignment.Bottom ->
+                    Alignment.BottomStart
+                settings.horizontalAlignment == HorizontalAlignment.Center && settings.verticalAlignment == VerticalAlignment.Top ->
+                    Alignment.TopCenter
+                settings.horizontalAlignment == HorizontalAlignment.Center && settings.verticalAlignment == VerticalAlignment.Center ->
+                    Alignment.Center
+                settings.horizontalAlignment == HorizontalAlignment.Center && settings.verticalAlignment == VerticalAlignment.Bottom ->
+                    Alignment.BottomCenter
+                settings.horizontalAlignment == HorizontalAlignment.Right && settings.verticalAlignment == VerticalAlignment.Top ->
+                    Alignment.TopEnd
+                settings.horizontalAlignment == HorizontalAlignment.Right && settings.verticalAlignment == VerticalAlignment.Center ->
+                    Alignment.CenterEnd
+                settings.horizontalAlignment == HorizontalAlignment.Right && settings.verticalAlignment == VerticalAlignment.Bottom ->
+                    Alignment.BottomEnd
+                else -> Alignment.Center
+            }
+        ) {
+            // 对于 <= 100% 使用 fillMaxHeight(scale)，对于 > 100% 使用 graphicsLayer
+            if (scale <= 1f) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "打印预览",
+                    modifier = Modifier.fillMaxHeight(scale),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "打印预览",
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    },
+                    contentScale = ContentScale.Fit
+                )
+            }
+        }
+    }
+}
+
+private fun loadPdfPageCount(
     context: android.content.Context,
     uri: Uri,
+    onComplete: (Int) -> Unit
+) {
+    try {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            val pdfRenderer = PdfRenderer(pfd)
+            onComplete(pdfRenderer.pageCount)
+            pdfRenderer.close()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        onComplete(1)
+    }
+}
+
+private fun loadPdfPage(
+    context: android.content.Context,
+    uri: Uri,
+    pageIndex: Int,
     onComplete: (Bitmap?) -> Unit
 ) {
     try {
         context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
             val pdfRenderer = PdfRenderer(pfd)
-            if (pdfRenderer.pageCount > 0) {
-                val page = pdfRenderer.openPage(0)
+            if (pageIndex >= 0 && pageIndex < pdfRenderer.pageCount) {
+                val page = pdfRenderer.openPage(pageIndex)
                 val bitmap = Bitmap.createBitmap(
                     page.width,
                     page.height,
@@ -173,5 +312,97 @@ private fun loadImage(
     } catch (e: Exception) {
         e.printStackTrace()
         onComplete(null)
+    }
+}
+
+private fun loadTextFile(context: android.content.Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            inputStream.bufferedReader().use { reader ->
+                val content = reader.readText()
+                // 限制文本长度，避免内存问题
+                if (content.length > 50000) {
+                    content.substring(0, 50000) + "\n\n[文件内容过长，仅显示前50000字符]"
+                } else {
+                    content
+                }
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+@Composable
+private fun TextFilePreview(
+    content: String,
+    settings: PrintSettings
+) {
+    val scrollState = rememberScrollState()
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .padding(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+        ) {
+            Text(
+                text = content,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnsupportedFilePreview(fileType: FileType, fileName: String = "") {
+    // 根据文件扩展名判断类型
+    val fileTypeName = when {
+        fileName.endsWith(".docx", ignoreCase = true) || 
+        fileName.endsWith(".doc", ignoreCase = true) -> "Word 文档"
+        fileName.endsWith(".xlsx", ignoreCase = true) || 
+        fileName.endsWith(".xls", ignoreCase = true) -> "Excel 表格"
+        fileName.endsWith(".pptx", ignoreCase = true) || 
+        fileName.endsWith(".ppt", ignoreCase = true) -> "PowerPoint 演示文稿"
+        fileName.endsWith(".zip", ignoreCase = true) || 
+        fileName.endsWith(".rar", ignoreCase = true) || 
+        fileName.endsWith(".7z", ignoreCase = true) -> "压缩文件"
+        fileName.endsWith(".apk", ignoreCase = true) -> "Android 应用"
+        else -> "此文件类型"
+    }
+    
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.padding(16.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Description,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "$fileTypeName 暂不支持预览",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "点击打印按钮，系统将尝试转换并打印",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }

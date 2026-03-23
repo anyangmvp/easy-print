@@ -37,11 +37,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import me.anyang.easyprint.data.*
-import me.anyang.easyprint.print.ImagePrintDocumentAdapter
-import me.anyang.easyprint.print.PdfPrintDocumentAdapter
+import me.anyang.easyprint.print.GeneratedPdfPrintDocumentAdapter
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import me.anyang.easyprint.ui.components.PrintPreview
 import me.anyang.easyprint.ui.components.PrintSettingsPanel
-import me.anyang.easyprint.ui.components.PrinterSelector
 import me.anyang.easyprint.viewmodel.PrintViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -59,12 +61,14 @@ fun HomeScreen(
     val selectedFile by viewModel.selectedFile.collectAsState()
     val printSettings by viewModel.printSettings.collectAsState()
     val isPrinting by viewModel.isPrinting.collectAsState()
-    val availablePrinters by viewModel.availablePrinters.collectAsState()
-    val selectedPrinter by viewModel.selectedPrinter.collectAsState()
     val showPageSelection by viewModel.showPageSelection.collectAsState()
     val customPages by viewModel.customPages.collectAsState()
-    val isScanning by viewModel.isScanning.collectAsState()
-    val scanMessage by viewModel.scanMessage.collectAsState()
+    var currentPreviewPage by remember { mutableIntStateOf(0) }
+    
+    // 当页码范围变化时，重置预览到第一页
+    LaunchedEffect(printSettings.pageRange) {
+        currentPreviewPage = 0
+    }
 
     LaunchedEffect(sharedFileUri) {
         sharedFileUri?.let { uri ->
@@ -114,17 +118,30 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            if (selectedFile != null && selectedFile?.type != FileType.UNKNOWN) {
+            if (selectedFile != null) {
                 AnimatedVisibility(
                     visible = true,
                     enter = fadeIn() + slideInVertically(),
                     exit = fadeOut() + slideOutVertically()
                 ) {
                     Column {
+                        val selectedPages = viewModel.getSelectedPages(selectedFile!!.pageCount)
+                        val effectiveTotalPages = selectedPages.size
+                        
+                        // currentPreviewPage 是选中页面列表中的索引（0, 1, 2...）
+                        // 当页码选择变化时，重置预览到第一页
+                        val previewIndex = currentPreviewPage.coerceIn(0, (effectiveTotalPages - 1).coerceAtLeast(0))
+
                         PrintPreviewCard(
                             file = selectedFile!!,
                             settings = printSettings,
-                            onTogglePageSelection = viewModel::togglePageSelection
+                            onTogglePageSelection = viewModel::togglePageSelection,
+                            currentPreviewPage = previewIndex,
+                            onPreviewPageChange = { index ->
+                                currentPreviewPage = index.coerceIn(0, selectedPages.size - 1)
+                            },
+                            selectedPages = selectedPages,
+                            effectiveTotalPages = effectiveTotalPages
                         )
 
                         Spacer(modifier = Modifier.height(20.dp))
@@ -136,24 +153,14 @@ fun HomeScreen(
                             onScaleChange = viewModel::updateScale,
                             onOrientationToggle = viewModel::toggleOrientation,
                             onPageRangeChange = viewModel::setPageRange,
-                            onCustomPagesChange = viewModel::setCustomPages
+                            onCustomPagesChange = viewModel::setCustomPages,
+                            onPaperSizeChange = viewModel::setPaperSize,
+                            onColorModeChange = viewModel::setColorMode,
+                            onHorizontalAlignmentChange = viewModel::setHorizontalAlignment,
+                            onVerticalAlignmentChange = viewModel::setVerticalAlignment
                         )
 
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        PrinterSelector(
-                            printers = availablePrinters,
-                            selectedPrinter = selectedPrinter,
-                            onSelectPrinter = viewModel::selectPrinter,
-                            onScanPrinters = viewModel::scanPrinters,
-                            onAddPrinterByIp = viewModel::addPrinterByIp,
-                            onDeletePrinter = viewModel::deletePrinter,
-                            onUpdatePrinterIp = viewModel::updatePrinterIp,
-                            isScanning = isScanning,
-                            scanMessage = scanMessage
-                        )
-
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
 
                         IOSPrintButton(
                             enabled = selectedFile != null && selectedFile?.type != FileType.UNKNOWN && !isPrinting,
@@ -317,7 +324,11 @@ private fun FileSelectionCard(
 private fun PrintPreviewCard(
     file: PrintFile,
     settings: PrintSettings,
-    onTogglePageSelection: () -> Unit
+    onTogglePageSelection: () -> Unit,
+    currentPreviewPage: Int,
+    onPreviewPageChange: (Int) -> Unit,
+    selectedPages: List<Int>,
+    effectiveTotalPages: Int
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -372,7 +383,12 @@ private fun PrintPreviewCard(
                 settings = settings,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(240.dp),
+                currentPage = currentPreviewPage,
+                onPageChange = onPreviewPageChange,
+                totalPages = file.pageCount,
+                selectedPages = selectedPages,
+                fileName = file.name
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -384,7 +400,7 @@ private fun PrintPreviewCard(
                 PreviewInfoItem(
                     icon = Icons.Outlined.Description,
                     label = "页数",
-                    value = "${file.pageCount}"
+                    value = "$effectiveTotalPages"
                 )
                 PreviewInfoItem(
                     icon = Icons.Outlined.AspectRatio,
@@ -452,7 +468,7 @@ private fun IOSPrintButton(
             .scale(scale)
             .clip(RoundedCornerShape(14.dp))
             .background(
-                if (enabled) {
+                if (enabled && !isLoading) {
                     Brush.horizontalGradient(
                         colors = listOf(
                             MaterialTheme.colorScheme.primary,
@@ -477,11 +493,23 @@ private fun IOSPrintButton(
         contentAlignment = Alignment.Center
     ) {
         if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                color = Color.White,
-                strokeWidth = 2.dp
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "正在应用设置...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+            }
         } else {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -554,45 +582,54 @@ private fun startPrint(
     val printManager = context.getSystemService(PrintManager::class.java)
     val jobName = "EasyPrint_${file.name}"
 
-    val adapter: PrintDocumentAdapter? = when (file.type) {
-        FileType.PDF -> {
-            PdfPrintDocumentAdapter(context, android.net.Uri.parse(file.uri), settings, viewModel)
-        }
-        FileType.IMAGE -> {
-            ImagePrintDocumentAdapter(context, android.net.Uri.parse(file.uri), settings)
-        }
-        else -> {
-            Toast.makeText(context, "不支持的文件类型: ${file.type}", Toast.LENGTH_LONG).show()
-            null
-        }
-    }
+    viewModel.setIsPrinting(true)
 
-    if (adapter == null) {
-        return
-    }
+    kotlinx.coroutines.GlobalScope.launch {
+        val generatedPdf = viewModel.generatePrintPdf(file)
 
-    val attributes = PrintAttributes.Builder()
-        .setMediaSize(
-            if (settings.isLandscape) {
-                when (settings.paperSize) {
-                    PaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4.asLandscape()
-                    PaperSize.A5 -> PrintAttributes.MediaSize.ISO_A5.asLandscape()
-                    PaperSize.Letter -> PrintAttributes.MediaSize.NA_LETTER.asLandscape()
-                    PaperSize.Legal -> PrintAttributes.MediaSize.NA_LEGAL.asLandscape()
-                }
+        withContext(kotlinx.coroutines.Dispatchers.Main) {
+            if (generatedPdf != null && generatedPdf.exists()) {
+                val adapter = GeneratedPdfPrintDocumentAdapter(context, generatedPdf)
+
+                val attributes = PrintAttributes.Builder()
+                    .setMediaSize(
+                        if (settings.isLandscape) {
+                            when (settings.paperSize) {
+                                PaperSize.A3 -> PrintAttributes.MediaSize.ISO_A3.asLandscape()
+                                PaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4.asLandscape()
+                                PaperSize.A5 -> PrintAttributes.MediaSize.ISO_A5.asLandscape()
+                                PaperSize.A6 -> PrintAttributes.MediaSize.ISO_A6.asLandscape()
+                                PaperSize.Letter -> PrintAttributes.MediaSize.NA_LETTER.asLandscape()
+                                PaperSize.Legal -> PrintAttributes.MediaSize.NA_LEGAL.asLandscape()
+                                PaperSize.Tabloid -> PrintAttributes.MediaSize.NA_LEDGER.asLandscape()
+                                PaperSize.B4 -> PrintAttributes.MediaSize.ISO_B4.asLandscape()
+                                PaperSize.B5 -> PrintAttributes.MediaSize.ISO_B5.asLandscape()
+                            }
+                        } else {
+                            when (settings.paperSize) {
+                                PaperSize.A3 -> PrintAttributes.MediaSize.ISO_A3
+                                PaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4
+                                PaperSize.A5 -> PrintAttributes.MediaSize.ISO_A5
+                                PaperSize.A6 -> PrintAttributes.MediaSize.ISO_A6
+                                PaperSize.Letter -> PrintAttributes.MediaSize.NA_LETTER
+                                PaperSize.Legal -> PrintAttributes.MediaSize.NA_LEGAL
+                                PaperSize.Tabloid -> PrintAttributes.MediaSize.NA_LEDGER
+                                PaperSize.B4 -> PrintAttributes.MediaSize.ISO_B4
+                                PaperSize.B5 -> PrintAttributes.MediaSize.ISO_B5
+                            }
+                        }
+                    )
+                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                    .build()
+
+                printManager?.print(jobName, adapter, attributes)
+                viewModel.setIsPrinting(false)
             } else {
-                when (settings.paperSize) {
-                    PaperSize.A4 -> PrintAttributes.MediaSize.ISO_A4
-                    PaperSize.A5 -> PrintAttributes.MediaSize.ISO_A5
-                    PaperSize.Letter -> PrintAttributes.MediaSize.NA_LETTER
-                    PaperSize.Legal -> PrintAttributes.MediaSize.NA_LEGAL
-                }
+                Toast.makeText(context, "生成打印文件失败", Toast.LENGTH_LONG).show()
+                viewModel.setIsPrinting(false)
             }
-        )
-        .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-        .build()
-
-    printManager?.print(jobName, adapter, attributes)
+        }
+    }
 }
 
 private fun formatFileSize(size: Long): String {

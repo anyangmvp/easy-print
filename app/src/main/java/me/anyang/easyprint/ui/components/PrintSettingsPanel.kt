@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -26,8 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import me.anyang.easyprint.data.PageRange
-import me.anyang.easyprint.data.PrintSettings
+import me.anyang.easyprint.data.*
 
 @Composable
 fun PrintSettingsPanel(
@@ -37,7 +37,11 @@ fun PrintSettingsPanel(
     onScaleChange: (Float) -> Unit,
     onOrientationToggle: () -> Unit,
     onPageRangeChange: (PageRange) -> Unit,
-    onCustomPagesChange: (String) -> Unit
+    onCustomPagesChange: (String) -> Unit,
+    onPaperSizeChange: (PaperSize) -> Unit = {},
+    onColorModeChange: (ColorMode) -> Unit = {},
+    onHorizontalAlignmentChange: (HorizontalAlignment) -> Unit = {},
+    onVerticalAlignmentChange: (VerticalAlignment) -> Unit = {}
 ) {
     var showPageGrid by remember { mutableStateOf(false) }
     var selectedPages by remember { mutableStateOf<Set<Int>>((1..totalPages).toSet()) }
@@ -151,6 +155,72 @@ fun PrintSettingsPanel(
                     onValueChange = onCustomPagesChange
                 )
             }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsSection(title = "纸张与颜色") {
+                // 纸张类型选择
+                IOSSettingRow(
+                    icon = Icons.Outlined.Description,
+                    title = "纸张类型",
+                    trailing = {
+                        PaperSizeSelector(
+                            currentSize = settings.paperSize,
+                            onSizeChange = onPaperSizeChange
+                        )
+                    }
+                )
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 12.dp),
+                    color = Color(0xFFF2F2F7)
+                )
+
+                // 颜色模式选择
+                IOSSettingRow(
+                    icon = Icons.Outlined.Palette,
+                    title = "颜色模式",
+                    trailing = {
+                        ColorModeSelector(
+                            currentMode = settings.colorMode,
+                            onModeChange = onColorModeChange
+                        )
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsSection(title = "对齐方式") {
+                // 水平对齐
+                IOSSettingRow(
+                    icon = Icons.Outlined.FormatAlignLeft,
+                    title = "水平对齐",
+                    trailing = {
+                        HorizontalAlignmentSelector(
+                            currentAlignment = settings.horizontalAlignment,
+                            onAlignmentChange = onHorizontalAlignmentChange
+                        )
+                    }
+                )
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 12.dp),
+                    color = Color(0xFFF2F2F7)
+                )
+
+                // 垂直对齐
+                IOSSettingRow(
+                    icon = Icons.Outlined.VerticalAlignTop,
+                    title = "垂直对齐",
+                    trailing = {
+                        VerticalAlignmentSelector(
+                            currentAlignment = settings.verticalAlignment,
+                            onAlignmentChange = onVerticalAlignmentChange
+                        )
+                    }
+                )
+            }
         }
     }
 }
@@ -206,6 +276,14 @@ private fun ScaleSelector(
     scale: Float,
     onScaleChange: (Float) -> Unit
 ) {
+    var inputValue by remember { mutableStateOf(scale.toInt().toString()) }
+
+    LaunchedEffect(scale) {
+        if (scale.toInt().toString() != inputValue) {
+            inputValue = scale.toInt().toString()
+        }
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -213,7 +291,10 @@ private fun ScaleSelector(
         // 100% 按钮
         FilterChip(
             selected = scale == 100f,
-            onClick = { onScaleChange(100f) },
+            onClick = {
+                onScaleChange(100f)
+                inputValue = "100"
+            },
             label = {
                 Text(
                     text = "100%",
@@ -228,31 +309,194 @@ private fun ScaleSelector(
         )
 
         // 自定义缩放输入框 - 显示纯数字，无%后缀
-        OutlinedTextField(
-            value = scale.toInt().toString(),
-            onValueChange = { value ->
-                if (value.isEmpty()) {
-                    onScaleChange(100f)
-                } else {
-                    value.toFloatOrNull()?.let { onScaleChange(it.coerceIn(10f, 400f)) }
+        BasicTextField(
+            value = inputValue,
+            onValueChange = { newValue: String ->
+                // 允许空值，允许输入数字
+                if (newValue.isEmpty() || newValue.all { it.isDigit() }) {
+                    inputValue = newValue
+                    // 如果有有效数字，立即更新预览
+                    val parsed = newValue.toFloatOrNull()
+                    if (parsed != null && parsed in 10f..400f) {
+                        onScaleChange(parsed)
+                    }
                 }
             },
             modifier = Modifier
-                .width(70.dp)
-                .height(40.dp),
+                .width(56.dp)
+                .height(28.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xFFF9F9F9))
+                .border(1.dp, Color(0xFFE5E5EA), RoundedCornerShape(6.dp))
+                .padding(horizontal = 4.dp),
             textStyle = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface
             ),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = Color(0xFFE5E5EA),
-                focusedContainerColor = Color.White,
-                unfocusedContainerColor = Color(0xFFF9F9F9)
-            )
+            decorationBox = { innerTextField ->
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    innerTextField()
+                }
+            }
         )
+    }
+}
+
+@Composable
+private fun PaperSizeSelector(
+    currentSize: PaperSize,
+    onSizeChange: (PaperSize) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        TextButton(
+            onClick = { expanded = true },
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = MaterialTheme.colorScheme.primary
+            )
+        ) {
+            Text(
+                text = currentSize.displayName,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Icon(
+                imageVector = Icons.Outlined.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            PaperSize.entries.forEach { size ->
+                DropdownMenuItem(
+                    text = { Text(size.displayName) },
+                    onClick = {
+                        onSizeChange(size)
+                        expanded = false
+                    },
+                    leadingIcon = if (size == currentSize) {
+                        {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else null
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorModeSelector(
+    currentMode: ColorMode,
+    onModeChange: (ColorMode) -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        ColorMode.entries.forEach { mode ->
+            val selected = mode == currentMode
+            FilterChip(
+                selected = selected,
+                onClick = { onModeChange(mode) },
+                label = {
+                    Text(
+                        text = mode.displayName,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                    selectedLabelColor = Color.White
+                ),
+                modifier = Modifier.height(32.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HorizontalAlignmentSelector(
+    currentAlignment: HorizontalAlignment,
+    onAlignmentChange: (HorizontalAlignment) -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        HorizontalAlignment.entries.forEach { alignment ->
+            val selected = alignment == currentAlignment
+            val icon = when (alignment) {
+                HorizontalAlignment.Left -> Icons.Outlined.FormatAlignLeft
+                HorizontalAlignment.Center -> Icons.Outlined.FormatAlignCenter
+                HorizontalAlignment.Right -> Icons.Outlined.FormatAlignRight
+            }
+            IconButton(
+                onClick = { onAlignmentChange(alignment) },
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else Color(0xFFF2F2F7)
+                    )
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = alignment.displayName,
+                    tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VerticalAlignmentSelector(
+    currentAlignment: VerticalAlignment,
+    onAlignmentChange: (VerticalAlignment) -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        VerticalAlignment.entries.forEach { alignment ->
+            val selected = alignment == currentAlignment
+            val icon = when (alignment) {
+                VerticalAlignment.Top -> Icons.Outlined.VerticalAlignTop
+                VerticalAlignment.Center -> Icons.Outlined.VerticalAlignCenter
+                VerticalAlignment.Bottom -> Icons.Outlined.VerticalAlignBottom
+            }
+            IconButton(
+                onClick = { onAlignmentChange(alignment) },
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else Color(0xFFF2F2F7)
+                    )
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = alignment.displayName,
+                    tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
 
