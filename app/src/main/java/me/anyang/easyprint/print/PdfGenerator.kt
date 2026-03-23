@@ -9,7 +9,7 @@ import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.Environment
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,10 +30,7 @@ class PdfGenerator(private val context: Context) {
         selectedPages: List<Int>
     ): File? = withContext(Dispatchers.IO) {
         try {
-            val outputFile = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                TEMP_PDF_NAME
-            )
+            val outputFile = File(context.cacheDir, TEMP_PDF_NAME)
 
             when (fileType) {
                 FileType.PDF -> {
@@ -82,12 +79,22 @@ class PdfGenerator(private val context: Context) {
             pagesToProcess.forEachIndexed { index, pageIndex ->
                 val page = pdfRenderer.openPage(pageIndex)
 
+//                // 计算高质量渲染的缩放因子（目标是 600 DPI，带内存保护）
+//                val maxBitmapPixels = 4096 * 4096L
+//                val rawScale = 600f / 72f
+//                val rawWidth = (page.width * rawScale).toLong()
+//                val rawHeight = (page.height * rawScale).toLong()
+//                val renderScale = if (rawWidth * rawHeight > maxBitmapPixels) {
+//                    Math.sqrt(maxBitmapPixels.toDouble() / (rawWidth * rawHeight)).toFloat()
+//                } else {
+//                    rawScale
+//                }
+
                 // 计算高质量渲染的缩放因子（目标是 600 DPI 用于高质量打印）
                 val targetDpi = 600f
                 val sourceDpi = 72f
                 val renderScale = targetDpi / sourceDpi
 
-                // 使用更高分辨率渲染 PDF 页面
                 val renderWidth = (page.width * renderScale).toInt().coerceAtLeast(1)
                 val renderHeight = (page.height * renderScale).toInt().coerceAtLeast(1)
 
@@ -151,6 +158,11 @@ class PdfGenerator(private val context: Context) {
             }
 
             pdfRenderer.close()
+
+            // 删除已存在的临时文件，避免 EEXIST 错误
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
 
             // 写入文件
             FileOutputStream(outputFile).use { output ->
@@ -230,6 +242,11 @@ class PdfGenerator(private val context: Context) {
         bitmap.recycle()
 
         pdfDocument.finishPage(pdfPage)
+
+        // 删除已存在的临时文件，避免 EEXIST 错误
+        if (outputFile.exists()) {
+            outputFile.delete()
+        }
 
         // 写入文件
         FileOutputStream(outputFile).use { output ->
@@ -312,23 +329,18 @@ class PdfGenerator(private val context: Context) {
         settings: PrintSettings
     ): DrawInfo {
         val userScale = settings.scale / 100f
+        val contentAspect = contentWidth / contentHeight
+        val paperAspect = paperWidth / paperHeight
 
-        // 首先根据用户缩放计算尺寸
-        var scaledWidth = contentWidth * userScale
-        var scaledHeight = contentHeight * userScale
-
-        // 如果缩放后内容小于纸张，强制填满整个纸张（保持纵横比）
-        if (scaledWidth < paperWidth || scaledHeight < paperHeight) {
-            val scaleToFillWidth = paperWidth / scaledWidth
-            val scaleToFillHeight = paperHeight / scaledHeight
-            val fillScale = maxOf(scaleToFillWidth, scaleToFillHeight)
-            scaledWidth *= fillScale
-            scaledHeight *= fillScale
+        // 保持原始比例，适配纸张（内容完整显示，不裁剪，不拉伸）
+        val (fitWidth, fitHeight) = if (contentAspect > paperAspect) {
+            paperWidth to paperWidth / contentAspect
+        } else {
+            paperHeight * contentAspect to paperHeight
         }
 
-        // 无论多大，都不能超过纸张边界
-        val finalWidth = minOf(scaledWidth, paperWidth)
-        val finalHeight = minOf(scaledHeight, paperHeight)
+        val finalWidth = fitWidth * userScale
+        val finalHeight = fitHeight * userScale
 
         // 计算水平位置（无页边距，0起点）
         val x = when (settings.horizontalAlignment) {
@@ -357,12 +369,21 @@ class PdfGenerator(private val context: Context) {
         settings: PrintSettings
     ): DrawInfo {
         val userScale = settings.scale / 100f
+        val contentAspect = originalWidth / originalHeight
+        val paperAspect = paperWidth / paperHeight
 
-        // 应用用户缩放到原始尺寸
-        val finalWidth = originalWidth * userScale
-        val finalHeight = originalHeight * userScale
+        // 保持原始比例，适配纸张（内容完整显示，不裁剪，不拉伸）
+        val (fitWidth, fitHeight) = if (contentAspect > paperAspect) {
+            // 内容更宽，以纸张宽度为基准
+            paperWidth to paperWidth / contentAspect
+        } else {
+            // 内容更高，以纸张高度为基准
+            paperHeight * contentAspect to paperHeight
+        }
 
-        // 计算绘制位置（无页边距，0起点）
+        val finalWidth = fitWidth * userScale
+        val finalHeight = fitHeight * userScale
+
         val x = when (settings.horizontalAlignment) {
             HorizontalAlignment.Left -> 0f
             HorizontalAlignment.Center -> (paperWidth - finalWidth) / 2
